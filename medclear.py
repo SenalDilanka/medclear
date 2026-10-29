@@ -21,6 +21,9 @@ def lookup(a: str, b: str):
     return INTERACTIONS.get(frozenset({a.strip().lower(), b.strip().lower()}))
 
 # ---- Safety rules, enforced in code ----
+import os
+import re
+
 REFUSAL = ("I can't advise on changing doses, stopping medicines, or diagnosing. "
            "Please speak to your pharmacist or doctor.")
 EMERGENCY_MSG = ("This may be an emergency. Call your local emergency number now "
@@ -45,14 +48,14 @@ EMERGENCY_LOCAL = [
     r"(அதிகமாக\s*(மாத்திரை|மருந்து)|அளவுக்கு (மீறி|அதிகமாக)|மிகை ?அளவு|மூச்சு (விட|வாங்க) முடியவில்லை)",
 ]
 BLOCKED_LOCAL = [
-    r"(බෙහෙත්|ඖෂධ|පෙති).{0,30}නවත්ව|නවත්ව.{0,30}(බෙහෙත්|ඖෂධ|පෙති)",
-    r"(மாத்திரை|மருந்து).{0,30}நிறுத்த|நிறுத்த.{0,30}(மாத்திரை|மருந்து)",
+    r"(බෙහෙත්|ඖෂධ|පෙති).{0,30}(නවත්ත|නවත්ව|නතර)|(නවත්ත|නවත්ව|නතර).{0,30}(බෙහෙත්|ඖෂධ|පෙති)",
+    r"(மாத்திரை|மருந்து).{0,30}(நிறுத்த|நிறுத்து|விட்டுவிடலாமா|விட்டுவிடவா|விடலாமா)|(நிறுத்த|நிறுத்து).{0,30}(மாத்திரை|மருந்து)",
 ]
 
 EMERGENCY = r"\b(overdos\w*|can'?t breathe|cannot breathe|severe reaction|swollen (face|throat|tongue)|chest pain|unconscious)\b|\b(swallow\w*|ate|eaten|took|taken|drank|ingested)\b.{0,40}\b(too many|too much|a bunch|a handful|handful|whole (bottle|packet|strip)|a lot of)\b"
 EMERGENCY_CHILD = r"\b(child|kid|baby|toddler|infant|son|daughter|boy|girl)\b.{0,50}\b(got into|swallow\w*|ate|eaten|drank|took|taken|ingest\w*|chew\w*)\b.{0,50}\b(tablets?|pills?|medicines?|medications?|meds?|bottle|packet|strip|capsules?|syrup)\b"
 BLOCKED_INPUT = [
-r"\b(double|triple|half|halve|increase|decrease|reduce|raise|lower|change|adjust|skip|miss|take (more|less|extra))\b.{0,40}\b(dose|dosage|tablets?|pills?|medicines?|medications?|meds?|capsules?)\b",
+    r"\b(double|triple|half|halve|increase|decrease|reduce|raise|lower|change|adjust|skip|miss|take (more|less|extra))\b.{0,40}\b(dose|dosage|tablets?|pills?|medicines?|medications?|meds?|capsules?)\b",
     r"\b(stop|quit|discontinue|come off|wean off)\b.{0,30}\b(taking|medicines?|medications?|meds?|pills?|tablets?|capsules?)\b",
     r"\b(go|going) (lower|higher)\b",
     r"\b(diagnos\w*|what is wrong with me|what['’]?s wrong with me|what (disease|condition|illness))\b",
@@ -72,8 +75,31 @@ UNSAFE_OUTPUT = [
 def hit(patterns, text):
     t = re.sub(r"\s+", " ", text.lower())
     return any(re.search(p, t) for p in patterns)
+
 def clean(reply: str) -> str:
     return re.sub(r"<thinking>.*?</thinking>\s*", "", reply, flags=re.S | re.I).strip()
+
+# ---- Model-based safety check for Sinhala / Tamil / non-English input ----
+TRIAGE_PROMPT = (
+    "You are a safety classifier for a medicine information service. The message may be in "
+    "English, Sinhala or Tamil. Reply with exactly one word.\n"
+    "EMERGENCY: someone may have taken too much medicine or swallowed medicine by accident "
+    "(including a child), a severe allergic reaction, trouble breathing, chest pain, or "
+    "unconsciousness.\n"
+    "REFUSE: the person asks whether to stop, skip, reduce, increase or change a medicine "
+    "or its dose or timing, or asks what illness they have.\n"
+    "OK: anything else, such as what a medicine is for, side effects, explaining a label, "
+    "or interactions."
+)
+
+def triage(text: str) -> str:
+    try:
+        checker = Agent(model=model, system_prompt=TRIAGE_PROMPT, callback_handler=None)
+        out = clean(str(checker(text))).strip().upper()
+    except Exception:
+        return "REFUSE"
+    m = re.match(r"\W*(EMERGENCY|REFUSE|OK)\b", out)
+    return m.group(1) if m else "REFUSE"
 
 # ---- Readability (Flesch-Kincaid grade, English only) ----
 def _syl(w):
@@ -111,6 +137,7 @@ if os.getenv("MEDCLEAR_BACKEND", "ollama") == "bedrock":
     )
 else:
     model = OllamaModel(host="http://localhost:11434", model_id="llama3.2")
+
 def make_tools(my_meds: list):
     @tool
     def parse_label(label_text: str) -> str:
@@ -181,6 +208,12 @@ class MedClear:
             return EMERGENCY_MSGS[lang]
         if hit(BLOCKED_INPUT + BLOCKED_LOCAL, text):
             return REFUSALS[lang]
+        if lang != "English" or re.search(r"[^\x00-\x7F]", text):
+            verdict = triage(text)
+            if verdict == "EMERGENCY":
+                return EMERGENCY_MSGS[lang]
+            if verdict == "REFUSE":
+                return REFUSALS[lang]
         reply = clean(str(self.agent(text)))
         if self.language == "English" and grade_level(reply) > 8:
             reply = clean(str(self.agent("Say that again in shorter sentences and simpler words.")))
@@ -199,4 +232,6 @@ if __name__ == "__main__":
         q = input("\nYou: ").strip()
         if q.lower() in ("quit", "exit"):
             break
+        if not q:
+            continue
         print("\nMedClear:", bot.ask(q))
