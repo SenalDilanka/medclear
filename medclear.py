@@ -36,7 +36,8 @@ r"\b(double|triple|half|halve|increase|decrease|reduce|raise|lower|change|adjust
     r"\b(less|fewer|smaller)\b.{0,30}\b(dose|dosage|tablets?|pills?|medicines?|medications?|meds?|capsules?)\b",
     r"\b(not|don'?t|do not|didn'?t|no need to) (finish|complete|take|use)\b.{0,30}\b(antibiotics?|course|medicines?|medications?|meds?|pills?|tablets?|capsules?)\b",
     r"\bwhat(?:['’]s| is| could be| might be) (?:causing|wrong|behind)\b",
-    r"\bwhy (?:do|am|does|have) i\b.{0,20}\b(pain|ache|rash|fever|dizz\w*|nausea|sick|tired|swelling)\b",
+    r"\bwhy (?:do|am|does|have|is|are) (?:i|my)\b.{0,30}\b(pain|ache|rash|fever|dizz\w*|nause\w*|vomit\w*|cough\w*|sick|tired|swelling|breathless)\b",
+    r"\b(two|three|four|2|3|4|another|an extra|extra)\b.{0,10}\b(tablets?|pills?|capsules?)\b.{0,20}\binstead\b|\binstead of (one|1)\b",
 ]
 UNSAFE_OUTPUT = [
     r"\byou (should|can|may|must|could) (stop|skip|double|increase|decrease|take more|take less)",
