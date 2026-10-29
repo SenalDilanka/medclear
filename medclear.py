@@ -26,12 +26,17 @@ EMERGENCY_MSG = ("This may be an emergency. Call your local emergency number now
 DISCLAIMER = "\n\nPlease confirm this with your pharmacist or doctor."
 
 EMERGENCY = r"\b(overdos\w*|can'?t breathe|cannot breathe|severe reaction|swollen (face|throat|tongue)|chest pain|unconscious)\b|\b(swallow\w*|ate|eaten|took|taken|drank|ingested)\b.{0,40}\b(too many|too much|a bunch|a handful|handful|whole (bottle|packet|strip)|a lot of)\b"
+EMERGENCY_CHILD = r"\b(child|kid|baby|toddler|infant|son|daughter|boy|girl)\b.{0,50}\b(got into|swallow\w*|ate|eaten|drank|took|taken|ingest\w*|chew\w*)\b.{0,50}\b(tablets?|pills?|medicines?|medications?|meds?|bottle|packet|strip|capsules?|syrup)\b"
 BLOCKED_INPUT = [
 r"\b(double|triple|half|halve|increase|decrease|reduce|raise|lower|change|adjust|skip|miss|take (more|less|extra))\b.{0,40}\b(dose|dosage|tablets?|pills?|medicines?|medications?|meds?|capsules?)\b",
     r"\b(stop|quit|discontinue|come off|wean off)\b.{0,30}\b(taking|medicines?|medications?|meds?|pills?|tablets?|capsules?)\b",
     r"\b(go|going) (lower|higher)\b",
     r"\b(diagnos\w*|what is wrong with me|what['’]?s wrong with me|what (disease|condition|illness))\b",
     r"\bdo i have (?!to\b|enough\b)",
+    r"\b(less|fewer|smaller)\b.{0,30}\b(dose|dosage|tablets?|pills?|medicines?|medications?|meds?|capsules?)\b",
+    r"\b(not|don'?t|do not|didn'?t|no need to) (finish|complete|take|use)\b.{0,30}\b(antibiotics?|course|medicines?|medications?|meds?|pills?|tablets?|capsules?)\b",
+    r"\bwhat(?:['’]s| is| could be| might be) (?:causing|wrong|behind)\b",
+    r"\bwhy (?:do|am|does|have) i\b.{0,20}\b(pain|ache|rash|fever|dizz\w*|nausea|sick|tired|swelling)\b",
 ]
 UNSAFE_OUTPUT = [
     r"\byou (should|can|may|must|could) (stop|skip|double|increase|decrease|take more|take less)",
@@ -138,7 +143,7 @@ class MedClear:
                            callback_handler=None)
 
     def ask(self, text: str) -> str:
-        if hit([EMERGENCY], text):
+        if hit([EMERGENCY, EMERGENCY_CHILD], text):
             return EMERGENCY_MSG
         if hit(BLOCKED_INPUT, text):
             return REFUSAL
