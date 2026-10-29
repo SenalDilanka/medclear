@@ -1,4 +1,6 @@
 import re
+import os
+from strands.models import BedrockModel
 from strands import Agent, tool
 from strands.models.ollama import OllamaModel
 from strands.hooks import (HookProvider, HookRegistry,
@@ -23,7 +25,29 @@ REFUSAL = ("I can't advise on changing doses, stopping medicines, or diagnosing.
            "Please speak to your pharmacist or doctor.")
 EMERGENCY_MSG = ("This may be an emergency. Call your local emergency number now "
                  "(Sri Lanka: 1990 ambulance - please verify) or go to the nearest hospital.")
-DISCLAIMER = "\n\nPlease confirm this with your pharmacist or doctor."
+DISCLAIMERS = {
+    "English": "\n\nPlease confirm this with your pharmacist or doctor.",
+    "Sinhala": "\n\nකරුණාකර මෙය ඔබේ ඖෂධවේදියා හෝ වෛද්‍යවරයා සමඟ තහවුරු කරගන්න.",
+    "Tamil": "\n\nஇதை உங்கள் மருந்தாளர் அல்லது மருத்துவரிடம் உறுதிப்படுத்திக் கொள்ளுங்கள்.",
+}
+REFUSALS = {
+    "English": REFUSAL,
+    "Sinhala": "මට මාත්‍රා වෙනස් කිරීම, ඖෂධ නවත්වීම හෝ රෝග විනිශ්චය ගැන උපදෙස් දිය නොහැක. කරුණාකර ඔබේ ඖෂධවේදියා හෝ වෛද්‍යවරයා සමඟ කතා කරන්න.",
+    "Tamil": "மருந்தின் அளவை மாற்றுவது, மருந்தை நிறுத்துவது அல்லது நோயைக் கண்டறிவது குறித்து என்னால் ஆலோசனை வழங்க முடியாது. உங்கள் மருந்தாளர் அல்லது மருத்துவரிடம் பேசுங்கள்.",
+}
+EMERGENCY_MSGS = {
+    "English": EMERGENCY_MSG,
+    "Sinhala": "මෙය හදිසි අවස්ථාවක් විය හැක. දැන්ම හදිසි අංකයට (ශ්‍රී ලංකාව: 1990 - කරුණාකර තහවුරු කරගන්න) අමතන්න, නැතහොත් ළඟම රෝහලට යන්න.",
+    "Tamil": "இது அவசர நிலையாக இருக்கலாம். உடனே அவசர எண்ணை (இலங்கை: 1990 - உறுதிப்படுத்திக் கொள்ளுங்கள்) அழைக்கவும், அல்லது அருகிலுள்ள மருத்துவமனைக்குச் செல்லவும்.",
+}
+EMERGENCY_LOCAL = [
+    r"(අධි ?මාත්‍රා|වැඩිපුර (බෙහෙත්|ඖෂධ|පෙති)|බෙහෙත් ගුලි ගොඩක්|හුස්ම ගන්න බැ)",
+    r"(அதிகமாக\s*(மாத்திரை|மருந்து)|அளவுக்கு (மீறி|அதிகமாக)|மிகை ?அளவு|மூச்சு (விட|வாங்க) முடியவில்லை)",
+]
+BLOCKED_LOCAL = [
+    r"(බෙහෙත්|ඖෂධ|පෙති).{0,30}නවත්ව|නවත්ව.{0,30}(බෙහෙත්|ඖෂධ|පෙති)",
+    r"(மாத்திரை|மருந்து).{0,30}நிறுத்த|நிறுத்த.{0,30}(மாத்திரை|மருந்து)",
+]
 
 EMERGENCY = r"\b(overdos\w*|can'?t breathe|cannot breathe|severe reaction|swollen (face|throat|tongue)|chest pain|unconscious)\b|\b(swallow\w*|ate|eaten|took|taken|drank|ingested)\b.{0,40}\b(too many|too much|a bunch|a handful|handful|whole (bottle|packet|strip)|a lot of)\b"
 EMERGENCY_CHILD = r"\b(child|kid|baby|toddler|infant|son|daughter|boy|girl)\b.{0,50}\b(got into|swallow\w*|ate|eaten|drank|took|taken|ingest\w*|chew\w*)\b.{0,50}\b(tablets?|pills?|medicines?|medications?|meds?|bottle|packet|strip|capsules?|syrup)\b"
@@ -48,6 +72,8 @@ UNSAFE_OUTPUT = [
 def hit(patterns, text):
     t = re.sub(r"\s+", " ", text.lower())
     return any(re.search(p, t) for p in patterns)
+def clean(reply: str) -> str:
+    return re.sub(r"<thinking>.*?</thinking>\s*", "", reply, flags=re.S | re.I).strip()
 
 # ---- Readability (Flesch-Kincaid grade, English only) ----
 def _syl(w):
@@ -77,8 +103,14 @@ class CallLimitHook(HookProvider):
         if self.n > self.max_calls:
             event.cancel_tool = "Tool limit reached. Answer with what you have."
 
-model = OllamaModel(host="http://localhost:11434", model_id="llama3.2")
-
+if os.getenv("MEDCLEAR_BACKEND", "ollama") == "bedrock":
+    model = BedrockModel(
+        model_id=os.environ["BEDROCK_MODEL_ID"],
+        region_name="ap-southeast-2",
+        temperature=0.2,
+    )
+else:
+    model = OllamaModel(host="http://localhost:11434", model_id="llama3.2")
 def make_tools(my_meds: list):
     @tool
     def parse_label(label_text: str) -> str:
@@ -144,16 +176,17 @@ class MedClear:
                            callback_handler=None)
 
     def ask(self, text: str) -> str:
-        if hit([EMERGENCY, EMERGENCY_CHILD], text):
-            return EMERGENCY_MSG
-        if hit(BLOCKED_INPUT, text):
-            return REFUSAL
-        reply = str(self.agent(text)).strip()
+        lang = self.language if self.language in REFUSALS else "English"
+        if hit([EMERGENCY, EMERGENCY_CHILD] + EMERGENCY_LOCAL, text):
+            return EMERGENCY_MSGS[lang]
+        if hit(BLOCKED_INPUT + BLOCKED_LOCAL, text):
+            return REFUSALS[lang]
+        reply = clean(str(self.agent(text)))
         if self.language == "English" and grade_level(reply) > 8:
-            reply = str(self.agent("Say that again in shorter sentences and simpler words.")).strip()
+            reply = clean(str(self.agent("Say that again in shorter sentences and simpler words.")))
         if hit(UNSAFE_OUTPUT, reply):
-            return REFUSAL
-        return reply + DISCLAIMER
+            return REFUSALS[lang]
+        return reply + DISCLAIMERS.get(self.language, DISCLAIMERS["English"])
 
 def ask(text: str) -> str:          # used by eval_medclear.py
     return MedClear().ask(text)
